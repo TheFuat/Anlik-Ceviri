@@ -170,11 +170,26 @@ const nameOf = c => LANGS.find(l => l[0] === c)?.[2] || c;
 /* Motor: Google Çeviri (anahtarsız uç nokta); Google yanıt vermezse MyMemory yedek olarak devreye girer */
 $("engine").textContent = "Motor: Google Çeviri";
 
+/* Android uygulamasında istek, tarayıcı kısıtlarına takılmasın diye Java tarafından gönderilir */
+const pending = {}; let reqId = 0;
+window.__gtDone = (id, ok, body) => { const p = pending[id]; delete pending[id]; if (p) ok ? p.res(body) : p.rej(new Error(body)); };
+function viaAndroid(url, text) {
+  return new Promise((res, rej) => {
+    const id = ++reqId; pending[id] = { res, rej };
+    window.Android.post(id, url, "q=" + encodeURIComponent(text));
+    setTimeout(() => window.__gtDone(id, false, "zaman aşımı"), 15000);
+  });
+}
 async function viaGoogle(text, from, to) {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t`;
-  const res = await fetch(url, { method: "POST", body: new URLSearchParams({ q: text }) });
-  if (!res.ok) throw new Error("Google Çeviri yanıt vermedi (HTTP " + res.status + ").");
-  const data = await res.json();
+  let data;
+  if (window.Android?.post) {
+    data = JSON.parse(await viaAndroid(url, text));
+  } else {
+    const res = await fetch(url, { method: "POST", body: new URLSearchParams({ q: text }) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    data = await res.json();
+  }
   const out = (data?.[0] || []).map(p => p?.[0] || "").join("");
   if (!out) throw new Error("Google Çeviri boş sonuç döndürdü.");
   return out;
@@ -205,7 +220,7 @@ async function translate() {
   try {
     let out;
     try { out = await viaGoogle(text, src.value, dst.value); $("engine").textContent = "Motor: Google Çeviri"; }
-    catch (g) { out = await viaMyMemory(text, src.value, dst.value); $("engine").textContent = "Motor: MyMemory (Google'a ulaşılamadı)"; }
+    catch (g) { out = await viaMyMemory(text, src.value, dst.value); $("engine").textContent = "Motor: MyMemory (Google hatası: " + (g?.message || g) + ")"; }
     show(out);
     $("status").textContent = "";
     history = [{ s: src.value, d: dst.value, a: text, b: out }, ...history.filter(h => !(h.a === text && h.s === src.value && h.d === dst.value))].slice(0, 12);
