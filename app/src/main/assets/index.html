@@ -78,6 +78,11 @@ textarea, .result {
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 kbd { font-family: var(--f-mono); font-size: .72rem; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--muted); }
 
+.settings { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 14px; }
+.settings summary { cursor: pointer; font-weight: 700; padding: 10px 0; }
+.settings .row { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; }
+.settings input { flex: 1; min-width: 0; font: inherit; font-family: var(--f-mono); font-size: .85rem; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.settings p { margin: 0 0 12px; color: var(--muted); font-size: .9rem; }
 .history h2 { font-family: var(--f-display); font-weight: 600; font-size: 1.1rem; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
 .history ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .history li {
@@ -138,6 +143,17 @@ kbd { font-family: var(--f-mono); font-size: .72rem; border: 1px solid var(--lin
     </div>
   </div>
 
+  <details class="settings" id="settings">
+    <summary>Ayarlar: Google API anahtarı</summary>
+    <p id="keyState">Anahtar girilmedi. Çeviriler anahtarsız Google adresiyle yapılıyor.</p>
+    <div class="row">
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza… ile başlayan anahtar">
+      <button class="btn primary" id="saveKey">Kaydet</button>
+      <button class="btn ghost" id="delKey">Sil</button>
+    </div>
+    <p>Anahtar yalnızca bu cihazda saklanır, uygulamanın içine veya GitHub'a yazılmaz.</p>
+  </details>
+
   <section class="history">
     <h2>Son çeviriler <button class="btn ghost" id="clearHist">Geçmişi sil</button></h2>
     <ul id="hist"></ul>
@@ -173,23 +189,34 @@ $("engine").textContent = "Motor: Google Çeviri";
 /* Android uygulamasında istek, tarayıcı kısıtlarına takılmasın diye Java tarafından gönderilir */
 const pending = {}; let reqId = 0;
 window.__gtDone = (id, ok, body) => { const p = pending[id]; delete pending[id]; if (p) ok ? p.res(body) : p.rej(new Error(body)); };
-function viaAndroid(url, text) {
+function viaAndroid(url, body) {
   return new Promise((res, rej) => {
     const id = ++reqId; pending[id] = { res, rej };
-    window.Android.post(id, url, "q=" + encodeURIComponent(text));
+    window.Android.post(id, url, body);
     setTimeout(() => window.__gtDone(id, false, "zaman aşımı"), 15000);
   });
 }
+async function postForm(url, params) {
+  const body = new URLSearchParams(params).toString();
+  if (window.Android?.post) return await viaAndroid(url, body);
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  const t = await res.text();
+  if (!res.ok) { let m = ""; try { m = JSON.parse(t).error.message; } catch {} throw new Error("HTTP " + res.status + (m ? ": " + m.slice(0, 160) : "")); }
+  return t;
+}
+
+/* Resmi Google Cloud Translation API (v2); anahtar Ayarlar'dan girilir */
+let apiKey = store.get("apiKey", "");
+async function viaGoogleCloud(text, from, to) {
+  const data = JSON.parse(await postForm("https://translation.googleapis.com/language/translate/v2?key=" + encodeURIComponent(apiKey),
+    { q: text, source: from, target: to, format: "text" }));
+  const out = data?.data?.translations?.[0]?.translatedText;
+  if (!out) throw new Error("Google boş sonuç döndürdü.");
+  return out;
+}
 async function viaGoogle(text, from, to) {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t`;
-  let data;
-  if (window.Android?.post) {
-    data = JSON.parse(await viaAndroid(url, text));
-  } else {
-    const res = await fetch(url, { method: "POST", body: new URLSearchParams({ q: text }) });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    data = await res.json();
-  }
+  const data = JSON.parse(await postForm(url, { q: text }));
   const out = (data?.[0] || []).map(p => p?.[0] || "").join("");
   if (!out) throw new Error("Google Çeviri boş sonuç döndürdü.");
   return out;
@@ -210,6 +237,34 @@ function show(text, cls) {
   result.textContent = text;
 }
 
+/* Sıra: resmi Google API (anahtar varsa) → anahtarsız Google → MyMemory */
+async function translateChain(text, from, to) {
+  const errs = [];
+  if (apiKey) {
+    try { const o = await viaGoogleCloud(text, from, to); $("engine").textContent = "Motor: Google Cloud (resmi)"; return o; }
+    catch (e) { errs.push("Google Cloud: " + (e?.message || e)); }
+  }
+  try { const o = await viaGoogle(text, from, to); $("engine").textContent = errs.length ? "Motor: Google (anahtarsız) · " + errs[0] : "Motor: Google Çeviri"; return o; }
+  catch (e) { errs.push("Google: " + (e?.message || e)); }
+  const o = await viaMyMemory(text, from, to);
+  $("engine").textContent = "Motor: MyMemory · " + errs.join(" · ");
+  return o;
+}
+
+function renderKey() {
+  $("keyState").textContent = apiKey
+    ? "Anahtar kayıtlı (…" + apiKey.slice(-4) + "). Çeviriler resmi Google Cloud API ile yapılıyor."
+    : "Anahtar girilmedi. Çeviriler anahtarsız Google adresiyle yapılıyor.";
+  $("apiKey").value = "";
+}
+$("saveKey").onclick = () => {
+  const k = $("apiKey").value.trim();
+  if (!k) { $("keyState").textContent = "Önce anahtarı kutuya yapıştırın."; return; }
+  apiKey = k; store.set("apiKey", k); renderKey();
+};
+$("delKey").onclick = () => { apiKey = ""; store.set("apiKey", ""); renderKey(); };
+renderKey();
+
 let busy = false;
 async function translate() {
   const text = input.value.trim();
@@ -218,9 +273,7 @@ async function translate() {
   if (busy) return;
   busy = true; $("go").disabled = true; $("status").textContent = "Çevriliyor…";
   try {
-    let out;
-    try { out = await viaGoogle(text, src.value, dst.value); $("engine").textContent = "Motor: Google Çeviri"; }
-    catch (g) { out = await viaMyMemory(text, src.value, dst.value); $("engine").textContent = "Motor: MyMemory (Google hatası: " + (g?.message || g) + ")"; }
+    const out = await translateChain(text, src.value, dst.value);
     show(out);
     $("status").textContent = "";
     history = [{ s: src.value, d: dst.value, a: text, b: out }, ...history.filter(h => !(h.a === text && h.s === src.value && h.d === dst.value))].slice(0, 12);

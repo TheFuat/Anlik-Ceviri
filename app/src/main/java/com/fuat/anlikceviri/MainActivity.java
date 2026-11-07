@@ -62,7 +62,8 @@ public class MainActivity extends Activity {
         /** Google Çeviri isteğini WebView yerine doğrudan gönderir; sonucu window.__gtDone ile sayfaya verir. */
         @JavascriptInterface
         public void post(final int id, final String url, final String body) {
-            if (!url.startsWith("https://translate.googleapis.com/")) {
+            if (!url.startsWith("https://translate.googleapis.com/")
+                    && !url.startsWith("https://translation.googleapis.com/")) {
                 sendResult(id, false, "izin verilmeyen adres");
                 return;
             }
@@ -82,7 +83,7 @@ public class MainActivity extends Activity {
                     InputStream in = code < 400 ? c.getInputStream() : c.getErrorStream();
                     String text = read(in);
                     if (code == 200) sendResult(id, true, text);
-                    else sendResult(id, false, "HTTP " + code);
+                    else sendResult(id, false, "HTTP " + code + errorMessage(text));
                 } catch (Exception e) {
                     sendResult(id, false, e.getClass().getSimpleName() + ": " + e.getMessage());
                 } finally {
@@ -100,6 +101,16 @@ public class MainActivity extends Activity {
         while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
         in.close();
         return out.toString("UTF-8");
+    }
+
+    /** Google'ın hata yanıtındaki "message" alanını kısa bir açıklama olarak döndürür. */
+    private static String errorMessage(String body) {
+        try {
+            String m = new JSONObject(body).getJSONObject("error").getString("message");
+            return ": " + (m.length() > 160 ? m.substring(0, 160) : m);
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private void sendResult(int id, boolean ok, String body) {
