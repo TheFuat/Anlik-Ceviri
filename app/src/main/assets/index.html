@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="tr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Anlık Çeviri</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Layout: iki panelli çalışma masası; üstte dil çubuğu, altta geçmiş listesi */
+:root {
+  --bg: #eef2f6;
+  --panel: #ffffff;
+  --fg: #142033;
+  --muted: #5b6b82;
+  --line: #d3dbe6;
+  --accent: #1f5fd1;
+  --accent-ink: #ffffff;
+  --soft: #e3ebfa;
+  --err: #b42318;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1520; --panel: #16202e; --fg: #e6ecf5; --muted: #93a3ba; --line: #2a3850;
+    --accent: #6d9dff; --accent-ink: #0b1220; --soft: #1c2a42; --err: #ff8a7a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1520; --panel: #16202e; --fg: #e6ecf5; --muted: #93a3ba; --line: #2a3850;
+  --accent: #6d9dff; --accent-ink: #0b1220; --soft: #1c2a42; --err: #ff8a7a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 16px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 20px; }
+header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+h1 { font-family: var(--f-display); font-weight: 800; font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 0; letter-spacing: -0.02em; text-wrap: balance; }
+h1 span { color: var(--accent); }
+.engine { font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); letter-spacing: 0.04em; }
+
+.langbar { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+select {
+  width: 100%; font: inherit; font-weight: 700; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+}
+.swap {
+  width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel);
+  color: var(--accent); font-size: 1.3rem; cursor: pointer; display: grid; place-items: center;
+  transition: transform .25s ease;
+}
+.swap:hover { transform: rotate(180deg); }
+
+.panes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; min-width: 0; }
+.pane.out { background: var(--soft); border-color: transparent; }
+textarea, .result {
+  font: inherit; font-size: 1.2rem; color: var(--fg); background: transparent; border: 0; resize: vertical;
+  min-height: 210px; padding: 18px; width: 100%; outline: none; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.result.placeholder { color: var(--muted); }
+.result.error { color: var(--err); font-size: 1rem; }
+.foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px 12px; flex-wrap: wrap; }
+.count { font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.btn {
+  font: inherit; font-weight: 700; border-radius: 10px; padding: 10px 18px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+}
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:disabled { opacity: .55; cursor: progress; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 6px 10px; font-size: .9rem; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+kbd { font-family: var(--f-mono); font-size: .72rem; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--muted); }
+
+.history h2 { font-family: var(--f-display); font-weight: 600; font-size: 1.1rem; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+.history ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.history li {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; cursor: pointer; min-width: 0;
+}
+.history li:hover { border-color: var(--accent); }
+.pair { font-family: var(--f-mono); font-size: .72rem; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; grid-row: span 2; align-self: center; }
+.src, .dst { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dst { color: var(--muted); }
+.empty { color: var(--muted); font-size: .95rem; }
+
+@media (max-width: 680px) {
+  body { padding-block: 16px 32px; }
+  .wrap { gap: 14px; }
+  .panes { grid-template-columns: 1fr; }
+  textarea, .result { min-height: 130px; font-size: 1.1rem; padding: 14px; }
+  select { padding: 12px 10px; font-size: .95rem; min-height: 48px; }
+  .swap { width: 48px; height: 48px; }
+  .btn { min-height: 44px; }
+  .kbd-hint { display: none !important; }
+  #go { flex: 1; }
+  .pane:first-child .foot > span:last-child { flex: 1; justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) { .swap { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Anlık <span>Çeviri</span></h1>
+    <div class="engine" id="engine">Çeviri motoru hazırlanıyor…</div>
+  </header>
+
+  <div class="langbar">
+    <select id="src" aria-label="Kaynak dil"></select>
+    <button class="swap" id="swap" title="Dilleri yer değiştir" aria-label="Dilleri yer değiştir">⇄</button>
+    <select id="dst" aria-label="Hedef dil"></select>
+  </div>
+
+  <div class="panes">
+    <div class="pane">
+      <textarea id="input" maxlength="2000" placeholder="Çevrilecek kelime veya cümleyi yazın…">Knowledge is power.</textarea>
+      <div class="foot">
+        <span class="count" id="count">0 / 2000</span>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="kbd-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd></span>
+          <button class="btn ghost" id="clear">Temizle</button>
+          <button class="btn primary" id="go">Çevir</button>
+        </span>
+      </div>
+    </div>
+    <div class="pane out">
+      <div class="result placeholder" id="result" aria-live="polite">Çeviri burada görünecek.</div>
+      <div class="foot">
+        <span class="count" id="status"></span>
+        <button class="btn ghost" id="copy">Kopyala</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="history">
+    <h2>Son çeviriler <button class="btn ghost" id="clearHist">Geçmişi sil</button></h2>
+    <ul id="hist"></ul>
+  </section>
+</div>
+
+<script>
+const LANGS = [
+  ["en","İngilizce","English"],["tr","Türkçe","Turkish"],["de","Almanca","German"],["fr","Fransızca","French"],
+  ["es","İspanyolca","Spanish"],["it","İtalyanca","Italian"],["pt","Portekizce","Portuguese"],["ru","Rusça","Russian"],
+  ["ar","Arapça","Arabic"],["fa","Farsça","Persian"],["zh","Çince","Chinese (Simplified)"],["ja","Japonca","Japanese"],
+  ["ko","Korece","Korean"],["nl","Felemenkçe","Dutch"],["pl","Lehçe","Polish"],["uk","Ukraynaca","Ukrainian"],
+  ["el","Yunanca","Greek"],["sv","İsveççe","Swedish"],["az","Azerbaycan Türkçesi","Azerbaijani"],["hi","Hintçe","Hindi"]
+];
+const $ = id => document.getElementById(id);
+const src = $("src"), dst = $("dst"), input = $("input"), result = $("result");
+for (const [code, name] of LANGS) { src.add(new Option(name, code)); dst.add(new Option(name, code)); }
+src.value = "en"; dst.value = "tr";
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+const saved = store.get("langs", null);
+if (saved) { src.value = saved[0]; dst.value = saved[1]; }
+let history = store.get("hist", []);
+
+const nameOf = c => LANGS.find(l => l[0] === c)?.[2] || c;
+
+/* Motor: Google Çeviri (anahtarsız uç nokta); Google yanıt vermezse MyMemory yedek olarak devreye girer */
+$("engine").textContent = "Motor: Google Çeviri";
+
+async function viaGoogle(text, from, to) {
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t`;
+  const res = await fetch(url, { method: "POST", body: new URLSearchParams({ q: text }) });
+  if (!res.ok) throw new Error("Google Çeviri yanıt vermedi (HTTP " + res.status + ").");
+  const data = await res.json();
+  const out = (data?.[0] || []).map(p => p?.[0] || "").join("");
+  if (!out) throw new Error("Google Çeviri boş sonuç döndürdü.");
+  return out;
+}
+
+async function viaMyMemory(text, from, to) {
+  if (text.length > 500) throw new Error("Ücretsiz motor tek seferde en fazla 500 karakter çevirebilir. Metni kısaltın.");
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Çeviri servisine ulaşılamadı (HTTP " + res.status + ").");
+  const data = await res.json();
+  if (data.responseStatus !== 200) throw new Error(data.responseDetails || "Çeviri yapılamadı.");
+  const t = document.createElement("textarea"); t.innerHTML = data.responseData.translatedText; return t.value;
+}
+
+function show(text, cls) {
+  result.className = "result" + (cls ? " " + cls : "");
+  result.textContent = text;
+}
+
+let busy = false;
+async function translate() {
+  const text = input.value.trim();
+  if (!text) { show("Çeviri burada görünecek.", "placeholder"); return; }
+  if (src.value === dst.value) { show(text); return; }
+  if (busy) return;
+  busy = true; $("go").disabled = true; $("status").textContent = "Çevriliyor…";
+  try {
+    let out;
+    try { out = await viaGoogle(text, src.value, dst.value); $("engine").textContent = "Motor: Google Çeviri"; }
+    catch (g) { out = await viaMyMemory(text, src.value, dst.value); $("engine").textContent = "Motor: MyMemory (Google'a ulaşılamadı)"; }
+    show(out);
+    $("status").textContent = "";
+    history = [{ s: src.value, d: dst.value, a: text, b: out }, ...history.filter(h => !(h.a === text && h.s === src.value && h.d === dst.value))].slice(0, 12);
+    store.set("hist", history); renderHist();
+  } catch (e) {
+    const msg = e instanceof TypeError ? "Çeviri servisine bağlanılamadı. İnternet bağlantınızı kontrol edin."
+              : (e?.message || "Çeviri yapılamadı.");
+    show(msg, "error"); $("status").textContent = "";
+  } finally { busy = false; $("go").disabled = false; }
+}
+
+function renderHist() {
+  const ul = $("hist"); ul.textContent = "";
+  if (!history.length) { const p = document.createElement("li"); p.className = "empty"; p.style.cursor = "default"; p.textContent = "Henüz çeviri yok. Yaptığınız çeviriler burada listelenir."; ul.append(p); return; }
+  for (const h of history) {
+    const li = document.createElement("li");
+    const pair = document.createElement("span"); pair.className = "pair"; pair.textContent = h.s + " → " + h.d;
+    const a = document.createElement("span"); a.className = "src"; a.textContent = h.a;
+    const b = document.createElement("span"); b.className = "dst"; b.textContent = h.b;
+    li.append(pair, a, b);
+    li.onclick = () => { src.value = h.s; dst.value = h.d; input.value = h.a; show(h.b); updateCount(); saveLangs(); };
+    ul.append(li);
+  }
+}
+
+const updateCount = () => $("count").textContent = input.value.length + " / 2000";
+const saveLangs = () => store.set("langs", [src.value, dst.value]);
+
+$("go").onclick = translate;
+input.addEventListener("input", updateCount);
+input.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); translate(); } });
+src.onchange = dst.onchange = saveLangs;
+$("swap").onclick = () => {
+  [src.value, dst.value] = [dst.value, src.value];
+  if (!result.classList.contains("placeholder") && !result.classList.contains("error")) { input.value = result.textContent; show("Çeviri burada görünecek.", "placeholder"); updateCount(); }
+  saveLangs();
+};
+$("clear").onclick = () => { input.value = ""; updateCount(); show("Çeviri burada görünecek.", "placeholder"); input.focus(); };
+$("clearHist").onclick = () => { history = []; store.set("hist", history); renderHist(); };
+$("copy").onclick = () => {
+  if (result.classList.contains("placeholder")) return;
+  const done = () => { $("status").textContent = "Kopyalandı"; setTimeout(() => $("status").textContent = "", 1500); };
+  if (window.Android?.copy) { window.Android.copy(result.textContent); done(); return; }
+  navigator.clipboard?.writeText(result.textContent).then(done).catch(() => {
+    const r = document.createRange(); r.selectNodeContents(result); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    $("status").textContent = "Metin seçildi, Ctrl+C ile kopyalayın";
+  });
+};
+
+updateCount(); renderHist();
+if (!history.length) show("Şöyle olacak: \"Bilgi güçtür.\" Çevir'e basarak deneyin.", "placeholder");
+</script>
