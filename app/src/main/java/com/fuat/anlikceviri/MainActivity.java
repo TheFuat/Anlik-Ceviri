@@ -16,12 +16,21 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import org.json.JSONObject;
+
+import com.google.mlkit.common.model.DownloadConditions;
+import com.google.mlkit.nl.translate.TranslateLanguage;
+import com.google.mlkit.nl.translate.Translation;
+import com.google.mlkit.nl.translate.Translator;
+import com.google.mlkit.nl.translate.TranslatorOptions;
 
 /** Uygulama, assets/index.html dosyasındaki çeviri arayüzünü tam ekran bir WebView içinde açar. */
 public class MainActivity extends Activity {
 
     private WebView webView;
+    private final Map<String, Translator> translators = new HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,12 +60,24 @@ public class MainActivity extends Activity {
         webView.saveState(outState);
     }
 
+    @Override
+    protected void onDestroy() {
+        for (Translator t : translators.values()) t.close();
+        super.onDestroy();
+    }
+
     /** Sayfanın "Kopyala" butonu bu köprü üzerinden Android panosuna yazar. */
     private class Bridge {
         @JavascriptInterface
         public void copy(String text) {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Çeviri", text));
+        }
+
+        /** ML Kit ile cihaz içinde çevirir; dil paketi yoksa önce bir kez indirir. */
+        @JavascriptInterface
+        public void translate(final int id, final String text, final String from, final String to) {
+            runOnUiThread(() -> translateOnDevice(id, text, from, to));
         }
 
         /** Google Çeviri isteğini WebView yerine doğrudan gönderir; sonucu window.__gtDone ile sayfaya verir. */
@@ -91,6 +112,62 @@ public class MainActivity extends Activity {
                 }
             }).start();
         }
+    }
+
+    private void translateOnDevice(int id, String text, String from, String to) {
+        String src = TranslateLanguage.fromLanguageTag(from);
+        String dst = TranslateLanguage.fromLanguageTag(to);
+        if (src == null || dst == null) {
+            sendResult(id, false, "bu dil cihaz içi çeviride yok");
+            return;
+        }
+        String key = src + ">" + dst;
+        Translator tr = translators.get(key);
+        if (tr == null) {
+            tr = Translation.getClient(new TranslatorOptions.Builder()
+                    .setSourceLanguage(src).setTargetLanguage(dst).build());
+            translators.put(key, tr);
+        }
+        final Translator t = tr;
+        status("Dil paketi hazırlanıyor… (ilk seferde birkaç dakika sürebilir)");
+        t.downloadModelIfNeeded(new DownloadConditions.Builder().build())
+                .addOnSuccessListener(v -> {
+                    status("Çevriliyor…");
+                    translateLines(t, text.split("\n", -1), 0, new StringBuilder(), id);
+                })
+                .addOnFailureListener(e -> {
+                    status("");
+                    sendResult(id, false, "dil paketi indirilemedi: " + e.getMessage());
+                });
+    }
+
+    /** Satır sonlarını korumak için metni satır satır çevirir. */
+    private void translateLines(Translator t, String[] lines, int i, StringBuilder out, int id) {
+        if (i == lines.length) {
+            status("");
+            sendResult(id, true, out.toString());
+            return;
+        }
+        if (i > 0) out.append('\n');
+        String line = lines[i];
+        if (line.trim().isEmpty()) {
+            out.append(line);
+            translateLines(t, lines, i + 1, out, id);
+            return;
+        }
+        t.translate(line)
+                .addOnSuccessListener(r -> {
+                    out.append(r);
+                    translateLines(t, lines, i + 1, out, id);
+                })
+                .addOnFailureListener(e -> {
+                    status("");
+                    sendResult(id, false, e.getMessage());
+                });
+    }
+
+    private void status(String msg) {
+        webView.evaluateJavascript("window.__status && window.__status(" + JSONObject.quote(msg) + ")", null);
     }
 
     private static String read(InputStream in) throws Exception {

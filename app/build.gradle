@@ -27,3 +27,8 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // Google ML Kit: telefonun içinde, ücretsiz ve sınırsız çeviri
+    implementation "com.google.mlkit:translate:17.0.3"
+}
